@@ -100,31 +100,52 @@ declare private function apply(
   (: The test tool itself should always run in timestamped mode. :)
   if (xdmp:request-timestamp()) then ()
   else fn:error((), "UPDATE", "Query must be read-only but contains updates"),
-  (: Since we already have a function item we could use $fn() here.
-   : But there is an inherent problem with xdmp:apply
-   : https://github.com/robwhitby/xray/issues/9
-   : It does not know if the function to be applied is an update or not.
-   : We do not want all tests to run as updates,
-   : because some queries check to see if they are run in timestamped mode.
-   : So we build a query string from the function data, and eval it.
-   :)
+  (: WealthCounsel fork of the upstream approach (see https://github.com/robwhitby/xray/issues/9):
+   : upstream inlined the test function name into the eval string so MarkLogic could statically
+   : detect update mode per test. But MarkLogic caches one compiled program per distinct eval
+   : text, so that compiled (and cached) the test module's entire import graph once PER TEST -
+   : for large codebases that leaks hundreds of MB per test into the module/program caches.
+   : Instead we keep the eval text constant per module (test name passed as an external
+   : variable, invoked dynamically), which compiles read-only; if a test performs updates the
+   : dynamic call fails with XDMP-UPDATEFUNCTIONFROMQUERY and we re-run it once against an
+   : update-forced variant of the program. Worst case: 2 compiled programs per module. :)
   try {
-    xdmp:eval('
-      xquery version "1.0-ml";
-      import module namespace test = "http://github.com/robwhitby/xray/test" at "' || $path || '";
-
-      let $start := xdmp:elapsed-time()
-      let $results := try { test:' || fn-local-name($fn) || '() } catch($err) { $err }
-      let $duration := xdmp:elapsed-time() - $start
-      let $map := map:map()
-      let $_ := (
-        map:put($map, "results", $results),
-        map:put($map, "time", $duration)
-      )
-      return $map
-    ')
+    let $map := eval-test(fn-local-name($fn), $path, fn:false())
+    return
+      if (map:get($map, "results")/self::error:error/error:code = "XDMP-UPDATEFUNCTIONFROMQUERY")
+      then eval-test(fn-local-name($fn), $path, fn:true())
+      else $map
   }
   catch * { $err:additional }
+};
+
+
+declare private function eval-test(
+  $fn-name as xs:string,
+  $path as xs:string,
+  $force-update as xs:boolean
+) as map:map
+{
+  xdmp:eval('
+    xquery version "1.0-ml";
+    import module namespace test = "http://github.com/robwhitby/xray/test" at "' || $path || '";
+    declare namespace xray = "http://github.com/robwhitby/xray";
+    declare variable $xray:fn-name as xs:string external;
+    ' || (if ($force-update) then 'declare option xdmp:update "true";' else '') || '
+
+    let $f := fn:function-lookup(fn:QName("http://github.com/robwhitby/xray/test", $xray:fn-name), 0)
+    let $start := xdmp:elapsed-time()
+    let $results := try { $f() } catch($err) { $err }
+    let $duration := xdmp:elapsed-time() - $start
+    let $map := map:map()
+    let $_ := (
+      map:put($map, "results", $results),
+      map:put($map, "time", $duration)
+    )
+    return $map
+  ',
+  (xs:QName("fn-name"), $fn-name)
+  )
 };
 
 
