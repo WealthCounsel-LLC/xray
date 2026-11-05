@@ -87,7 +87,24 @@ declare function assert-response(
     attribute result { if ($passed) then "passed" else "failed" },
     element actual { $actual },
     element expected { $expected },
-    element message { $message }
+    element message { $message },
+    if ($passed) then () else failure-stack()
+  }
+};
+
+
+(: WealthCounsel fork: point failed assertions at the line in the caller's code (test module and
+ : its helpers), outermost frame first. Frames past the eval'd test program (its main module has no
+ : uri; beyond it is the xray request itself) and xray's own src/ frames are dropped. :)
+declare private function failure-stack() as element(error:stack)
+{
+  element error:stack {
+    fn:reverse(
+      (try { fn:error() } catch ($e) { $e })/error:stack/error:frame
+        [fn:string(error:uri)]
+        [fn:empty(preceding-sibling::error:frame[fn:not(fn:string(error:uri))])]
+        [fn:not(fn:starts-with(error:uri, $ROOT || "/xray/src/"))]
+    ) ! element error:frame { error:uri, error:line }
   }
 };
 

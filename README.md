@@ -127,6 +127,8 @@ assert:false ($actual as item()*, [$message as xs:string?])
 ```
 See `src/assertions.xqy` for the assertion definitions. All assertions are overloaded to accept an optional message parameter to provide more information of failures.
 
+Failed assertions also include an `error:stack` of `error:frame` elements (`uri` + `line`, outermost first) pointing at the line in your test module where the assertion was made.
+
 ## Setup and teardown functions
 Use the annotations `%test:setup` and `%test:teardown`. If defined, the setup function is invoked before any tests, and in a different transaction so any database updates are visible to the tests. The teardown function is executed after all tests in that module have finished.
 
